@@ -81,6 +81,12 @@ class OpenAICompatModelsFetcher(QObject):
         models = modelList.get("data", [])
         if not models:
             return
+
+        if isinstance(models, dict) and "data" in models:
+            models = models["data"]
+            if not models:
+                return
+
         for model in models:
             id = model.get("id")
             if not id:
