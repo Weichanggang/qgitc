@@ -61,7 +61,11 @@ class AiChatHistoryStore(QObject):
         newHistories = self._settings.chatHistories()
         for historyData in newHistories:
             if isinstance(historyData, dict):
-                histories.append(AiChatHistory.fromDict(historyData))
+                history = AiChatHistory.fromDict(historyData)
+                # Skip empty conversations that were previously persisted.
+                if not history.messages:
+                    continue
+                histories.append(history)
 
         byId: Dict[str, AiChatHistory] = {h.historyId: h for h in histories}
         for h in existing:
@@ -139,7 +143,10 @@ class AiChatHistoryStore(QObject):
         if history.modelId != modelId:
             history.modelId = modelId
             self._model.setData(idx, history, Qt.UserRole)
-            self._scheduleSave(historyId, history.toDict())
+            # Only persist if the history has messages; empty conversations
+            # are transient and should not be saved to settings.
+            if history.messages:
+                self._scheduleSave(historyId, history.toDict())
             self.historyUpdated.emit(history)
 
         return history
@@ -211,7 +218,9 @@ class AiChatHistoryStore(QObject):
         if newRow != row:
             idx = self._model.index(newRow, 0)
 
-        self._scheduleSave(historyId, history.toDict())
+        # Only persist histories that have actual messages.
+        if history.messages:
+            self._scheduleSave(historyId, history.toDict())
         self.historyUpdated.emit(history)
         return history
 

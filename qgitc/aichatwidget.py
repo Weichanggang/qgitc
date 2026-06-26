@@ -1313,7 +1313,13 @@ class AiChatWidget(QWidget):
         history = AiChatHistory()
         history.modelKey = AiModelFactory.modelKey(model)
         history.modelId = model.modelId or model.name
-        self._historyPanel.insertHistoryAtTop(history)
+
+        # Insert directly into the model (bypassing the store) so empty
+        # conversations are never persisted to settings. They will be saved
+        # only when the first message is sent via _saveChatHistoryFromLoop.
+        store = ApplicationBase.instance().aiChatHistoryStore()
+        store.model().insertHistory(0, history)
+        self._historyPanel.setCurrentHistory(history.historyId)
 
         # Clear current chat
         self._clearCurrentChat()

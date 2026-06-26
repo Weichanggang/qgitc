@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
+from qgitc.aichathistory import AiChatHistory
 from qgitc.aichatwidget import AiChatWidget
 from qgitc.applicationbase import ApplicationBase
 from qgitc.llm import AiModelBase
@@ -294,6 +295,163 @@ class TestReasoningDeltaAutoScroll(TestBase):
         self.assertEqual(
             0, len(scrollCalls),
             "_scrollToBottom should NOT be called when auto-scroll is disabled",
+        )
+
+
+class TestCreateNewConversation(TestBase):
+    """Tests for _createNewConversation: empty conversations must bypass the store."""
+
+    def doCreateRepo(self):
+        pass
+
+    def _makeWidget(self) -> AiChatWidget:
+        widget = AiChatWidget(parent=None, embedded=False, hideHistoryPanel=True)
+        self.processEvents()
+        return widget
+
+    # ------------------------------------------------------------------
+    # Test 1: New conversation inserts directly into model, not via store
+    # ------------------------------------------------------------------
+    def test_createNewConversation_inserts_into_model_not_store(self):
+        """_createNewConversation should call store.model().insertHistory, not store.insertHistoryAtTop."""
+        widget = self._makeWidget()
+
+        fakeModel = MagicMock()
+        fakeModel.modelId = "test-model"
+        fakeModel.name = "Test Model"
+        fakeModel.modelKey = "GithubCopilot"
+
+        store = ApplicationBase.instance().aiChatHistoryStore()
+        originalInsertCount = store.model().rowCount()
+
+        with patch.object(widget, 'currentChatModel', return_value=fakeModel), \
+             patch.object(widget._contextPanel, 'cbBots', new_callable=PropertyMock) as mockCbBots, \
+             patch.object(widget._historyPanel, 'historyModel',
+                          return_value=store.model()), \
+             patch.object(widget._historyPanel, 'setCurrentHistory'), \
+             patch.object(widget, '_clearCurrentChat'), \
+             patch.object(widget, '_setEmbeddedRecentListVisible'):
+
+            widget._createNewConversation()
+
+        # Should have inserted one new history into the model
+        self.assertEqual(
+            originalInsertCount + 1,
+            store.model().rowCount(),
+            "A new history should be inserted into the model",
+        )
+
+        # The new history should be at the top
+        newHistory = store.model().getHistory(0)
+        self.assertIsNotNone(newHistory)
+        self.assertEqual(newHistory.modelId, "test-model")
+        self.assertEqual(newHistory.messages, [],
+                         "New conversation should have no messages")
+
+    # ------------------------------------------------------------------
+    # Test 2: Empty conversation is NOT persisted to settings
+    # ------------------------------------------------------------------
+    def test_createNewConversation_does_not_persist_empty(self):
+        """_createNewConversation must NOT call _scheduleSave on the store."""
+        widget = self._makeWidget()
+
+        fakeModel = MagicMock()
+        fakeModel.modelId = "test-model"
+        fakeModel.name = "Test Model"
+        fakeModel.modelKey = "GithubCopilot"
+
+        store = ApplicationBase.instance().aiChatHistoryStore()
+
+        with patch.object(widget, 'currentChatModel', return_value=fakeModel), \
+             patch.object(widget._contextPanel, 'cbBots', new_callable=PropertyMock) as mockCbBots, \
+             patch.object(widget._historyPanel, 'historyModel',
+                          return_value=store.model()), \
+             patch.object(widget._historyPanel, 'setCurrentHistory'), \
+             patch.object(widget, '_clearCurrentChat'), \
+             patch.object(widget, '_setEmbeddedRecentListVisible'), \
+             patch.object(store, '_scheduleSave') as mockSave:
+
+            widget._createNewConversation()
+
+        mockSave.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Test 3: Reuses existing empty conversation instead of creating new
+    # ------------------------------------------------------------------
+    def test_createNewConversation_reuses_existing_empty(self):
+        """If an empty conversation already exists at top, _createNewConversation should reuse it."""
+        widget = self._makeWidget()
+
+        fakeModel = MagicMock()
+        fakeModel.modelId = "test-model"
+        fakeModel.name = "Test Model"
+        fakeModel.modelKey = "GithubCopilot"
+
+        store = ApplicationBase.instance().aiChatHistoryStore()
+
+        # First call creates an empty conversation
+        with patch.object(widget, 'currentChatModel', return_value=fakeModel), \
+             patch.object(widget._contextPanel, 'cbBots', new_callable=PropertyMock) as mockCbBots, \
+             patch.object(widget._historyPanel, 'historyModel',
+                          return_value=store.model()), \
+             patch.object(widget._historyPanel, 'setCurrentHistory'), \
+             patch.object(widget, '_clearCurrentChat'), \
+             patch.object(widget, '_setEmbeddedRecentListVisible'):
+
+            widget._createNewConversation()
+
+        firstCount = store.model().rowCount()
+
+        # Second call should reuse the existing empty conversation
+        with patch.object(widget, 'currentChatModel', return_value=fakeModel), \
+             patch.object(widget._contextPanel, 'cbBots', new_callable=PropertyMock) as mockCbBots, \
+             patch.object(widget._historyPanel, 'historyModel',
+                          return_value=store.model()), \
+             patch.object(widget._historyPanel, 'setCurrentHistory'), \
+             patch.object(widget, '_clearCurrentChat'), \
+             patch.object(widget, '_setEmbeddedRecentListVisible'):
+
+            widget._createNewConversation()
+
+        self.assertEqual(
+            firstCount,
+            store.model().rowCount(),
+            "Should not create a new history when an empty one already exists",
+        )
+
+    # ------------------------------------------------------------------
+    # Test 4: Creates new when top history has messages
+    # ------------------------------------------------------------------
+    def test_createNewConversation_creates_new_when_top_has_messages(self):
+        """If the top history has messages, _createNewConversation should create a new one."""
+        widget = self._makeWidget()
+
+        fakeModel = MagicMock()
+        fakeModel.modelId = "test-model"
+        fakeModel.name = "Test Model"
+        fakeModel.modelKey = "GithubCopilot"
+
+        store = ApplicationBase.instance().aiChatHistoryStore()
+
+        # Insert a non-empty history at top
+        nonEmpty = AiChatHistory(messages=[{"role": "user", "content": "hi"}])
+        store.model().insertHistory(0, nonEmpty)
+        initialCount = store.model().rowCount()
+
+        with patch.object(widget, 'currentChatModel', return_value=fakeModel), \
+             patch.object(widget._contextPanel, 'cbBots', new_callable=PropertyMock) as mockCbBots, \
+             patch.object(widget._historyPanel, 'historyModel',
+                          return_value=store.model()), \
+             patch.object(widget._historyPanel, 'setCurrentHistory'), \
+             patch.object(widget, '_clearCurrentChat'), \
+             patch.object(widget, '_setEmbeddedRecentListVisible'):
+
+            widget._createNewConversation()
+
+        self.assertEqual(
+            initialCount + 1,
+            store.model().rowCount(),
+            "Should create a new history when the top one has messages",
         )
 
 
