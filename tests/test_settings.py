@@ -25,6 +25,21 @@ class TestSettings(TestBase):
         submodules = self.settings.submodulesCache(Git.REPO_DIR)
         self.assertEqual(submodules, ["submodule1", "submodule2"])
 
+    def testSubmodulesCacheWithNoneRepoDir(self):
+        """setSubmodulesCache should handle None repoDir gracefully."""
+        # submodulesCache already handles None
+        submodules = self.settings.submodulesCache(None)
+        self.assertEqual(submodules, [])
+
+        # setSubmodulesCache should also handle None without crashing
+        self.settings.setSubmodulesCache(None, ["sub1", "sub2"])
+
+        # verify it didn't break anything
+        self.settings.setSubmodulesCache(
+            Git.REPO_DIR, ["submodule1"])
+        submodules = self.settings.submodulesCache(Git.REPO_DIR)
+        self.assertEqual(submodules, ["submodule1"])
+
     def testDefaultLlmModel(self):
         # avoid `GithubCopilot` named changed without knowing
         self.assertEqual(self.settings.defaultLlmModel(), "GithubCopilot")

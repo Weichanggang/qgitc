@@ -540,6 +540,8 @@ class Settings(QSettings):
         return cache
 
     def setSubmodulesCache(self, repoDir, cache: List[str]):
+        if not repoDir:
+            return
         key = os.path.normpath(os.path.normcase(repoDir))
         self.beginGroup("submodulesCache")
         self.setValue(key, cache)

@@ -611,14 +611,15 @@ class Application(ApplicationBase):
             return
 
         self._submodules = thread.submodules[:]
-        caches = self._settings.submodulesCache(Git.REPO_DIR)
+        if Git.REPO_DIR:
+            caches = self._settings.submodulesCache(Git.REPO_DIR)
 
-        if len(self._submodules) != len(caches):
-            self._settings.setSubmodulesCache(Git.REPO_DIR, self._submodules)
+            if len(self._submodules) != len(caches):
+                self._settings.setSubmodulesCache(Git.REPO_DIR, self._submodules)
 
-        newSubmodules = list(set(self._submodules) - set(caches))
-        if newSubmodules:
-            self.submoduleAvailable.emit(newSubmodules, False)
+            newSubmodules = list(set(self._submodules) - set(caches))
+            if newSubmodules:
+                self.submoduleAvailable.emit(newSubmodules, False)
 
         self.submoduleSearchCompleted.emit()
 
