@@ -88,10 +88,14 @@ class BlameFetcher(DataFetcher):
     def makeArgs(self, args):
         file = args[0]
         rev = args[1]
+        ignoreWhitespace = args[2] if len(args) > 2 else False
 
-        blameArgs = ["blame", "--porcelain", "--", file]
+        blameArgs = ["blame", "--porcelain"]
+        if ignoreWhitespace:
+            blameArgs.append("-w")
         if rev:
-            blameArgs.insert(1, rev)
+            blameArgs.append(rev)
+        blameArgs.extend(["--", file])
 
         return blameArgs
 

@@ -6,6 +6,7 @@ from typing import List
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -208,6 +209,21 @@ class HeaderWidget(QWidget):
             QSizePolicy.Expanding,
             QSizePolicy.Fixed))
 
+        settings = ApplicationBase.instance().settings()
+        self._cbIgnoreWhitespace = QCheckBox(
+            self.tr("Ignore whitespace"), self)
+        self._cbIgnoreWhitespace.setChecked(
+            settings.ignoreWhitespaceBlame())
+        self._cbIgnoreWhitespace.setToolTip(
+            self.tr("Ignore whitespace when comparing the parent’s version "
+                    "and the child’s to find where the lines came from."))
+        layout.addWidget(self._cbIgnoreWhitespace)
+
+        self._cbIgnoreWhitespace.toggled.connect(
+            self._onIgnoreWhitespaceToggled)
+        settings.ignoreWhitespaceBlameChanged.connect(
+            self._cbIgnoreWhitespace.setChecked)
+
         self._btnPrev.clicked.connect(
             self._onPrevious)
         self._btnNext.clicked.connect(
@@ -262,6 +278,16 @@ class HeaderWidget(QWidget):
         self._curIndex += 1
         self._updateInfo()
         self._blameCurrent()
+
+    def _onIgnoreWhitespaceToggled(self, checked: bool):
+        settings = ApplicationBase.instance().settings()
+        settings.setIgnoreWhitespaceBlame(checked)
+        history = self._histories[self._curIndex] if self._histories else None
+        if history:
+            self._view.blame(history.file, history.rev,
+                             history.lineNo,
+                             self._view.viewer.repoDir,
+                             forceReload=True)
 
     def clear(self):
         self._histories.clear()
@@ -390,11 +416,12 @@ class BlameView(QWidget):
         self._viewer.clear()
         self._commitPanel.clear()
 
-    def blame(self, file, rev=None, lineNo=0, repoDir=None):
+    def blame(self, file, rev=None, lineNo=0, repoDir=None,
+              forceReload=False):
         if not Git.available():
             return
 
-        if self._file == file and self._rev == rev:
+        if self._file == file and self._rev == rev and not forceReload:
             return
 
         self._headerWidget.notifyFecthingStarted()
@@ -403,7 +430,8 @@ class BlameView(QWidget):
         self._viewer.repoDir = repoDir
         self._viewer.beginReading()
         self._fetcher.cwd = repoDir or Git.REPO_DIR
-        self._fetcher.fetch(file, rev)
+        ignoreWhitespace = ApplicationBase.instance().settings().ignoreWhitespaceBlame()
+        self._fetcher.fetch(file, rev, ignoreWhitespace)
 
         self._commitPanel.showLogs(self._fetcher.cwd, file, rev)
 

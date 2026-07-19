@@ -57,6 +57,7 @@ class Settings(QSettings):
 
     showWhitespaceChanged = Signal(bool)
     ignoreWhitespaceChanged = Signal(int)
+    ignoreWhitespaceBlameChanged = Signal(bool)
     logViewFontChanged = Signal(QFont)
     diffViewFontChanged = Signal(QFont)
     bugPatternChanged = Signal()
@@ -251,6 +252,13 @@ class Settings(QSettings):
     def setIgnoreWhitespace(self, index):
         self.setValue("ignoreWhitespace", index)
         self.ignoreWhitespaceChanged.emit(index)
+
+    def ignoreWhitespaceBlame(self):
+        return self.value("ignoreWhitespaceBlame", False, type=bool)
+
+    def setIgnoreWhitespaceBlame(self, ignore):
+        self.setValue("ignoreWhitespaceBlame", ignore)
+        self.ignoreWhitespaceBlameChanged.emit(ignore)
 
     def mergeToolList(self):
         tools = [MergeTool(MergeTool.Nothing, ".png", "imgdiff"),

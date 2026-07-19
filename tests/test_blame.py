@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 import os
+from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
 
+from qgitc.applicationbase import ApplicationBase
 from qgitc.gitutils import Git
 from qgitc.windowtype import WindowType
 from tests.base import TestBase
@@ -46,6 +48,19 @@ class TestBlame(TestBase):
         spyClicked.wait(100)
         self.assertEqual(1, spyClicked.count())
         self.assertEqual(spyClicked.at(0)[0].lineNo(), 1)
+
+    def testBlameIgnoresWhitespaceSetting(self):
+        settings = ApplicationBase.instance().settings()
+        settings.setIgnoreWhitespaceBlame(True)
+
+        file = os.path.join(self.gitDir.name, "test.py")
+        with patch.object(self.window._view._fetcher, 'fetch') as mockFetch:
+            self.window.blame(file, lineNo=1)
+            self.assertTrue(mockFetch.called)
+            args = mockFetch.call_args[0]
+            self.assertEqual(args, (file, None, True))
+
+        self.assertTrue(settings.ignoreWhitespaceBlame())
 
     def testFind(self):
         spyFetcher = QSignalSpy(self.window._view._fetcher.fetchFinished)
