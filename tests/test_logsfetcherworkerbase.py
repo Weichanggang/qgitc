@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from PySide6.QtTest import QSignalSpy
 
 from qgitc.common import Commit
+from qgitc.gitutils import Git
 from qgitc.logsfetcherworkerbase import LogsFetcherWorkerBase
 from tests.base import TestBase
 
@@ -363,3 +364,58 @@ class TestLogsFetcherWorkerBaseComposite(TestBase):
         self.assertEqual([c2], self._worker._mergedLogs[key].subCommits)
         self.assertIn(c3.sha1, self._worker._mergedLogs,
                       "repoB already contributed, so c3 becomes its own row")
+
+    # ------------------------------------------------------------------
+    #  _makeLocalCommits: untracked files associated with correct repoDir
+    # ------------------------------------------------------------------
+    def testMakeLocalCommits_untrackedFilesOnFirstRepo(self):
+        """Untracked files from the first repo go on the top-level lucCommit."""
+        lcc = Commit()
+        luc = Commit()
+        LogsFetcherWorkerBase._makeLocalCommits(
+            lcc, luc, False, True, ".", ["file1.txt"])
+
+        self.assertEqual(Git.LUC_SHA1, luc.sha1)
+        self.assertEqual(".", luc.repoDir)
+        self.assertEqual(["file1.txt"], luc.untrackedFiles)
+
+    def testMakeLocalCommits_untrackedFilesOnSubCommit(self):
+        """Untracked files from a second repo go on the sub-commit, not the top-level."""
+        lcc = Commit()
+        luc = Commit()
+        # First repo (".") has LUC but no untracked files
+        LogsFetcherWorkerBase._makeLocalCommits(
+            lcc, luc, False, True, ".", None)
+        # Second repo ("sub") has untracked files
+        LogsFetcherWorkerBase._makeLocalCommits(
+            lcc, luc, False, True, "sub", ["sub/file.txt"])
+
+        self.assertEqual(".", luc.repoDir)
+        self.assertEqual([], luc.untrackedFiles,
+                         "top-level should not carry sub's untracked files")
+        self.assertEqual(1, len(luc.subCommits))
+        sub = luc.subCommits[0]
+        self.assertEqual("sub", sub.repoDir)
+        self.assertEqual(["sub/file.txt"], sub.untrackedFiles)
+
+    def testMakeLocalCommits_untrackedFilesMultipleRepos(self):
+        """Untracked files from multiple repos are kept on their respective owners."""
+        lcc = Commit()
+        luc = Commit()
+        LogsFetcherWorkerBase._makeLocalCommits(
+            lcc, luc, False, True, ".", ["top.txt"])
+        LogsFetcherWorkerBase._makeLocalCommits(
+            lcc, luc, False, True, "subA", ["subA/a.txt"])
+        LogsFetcherWorkerBase._makeLocalCommits(
+            lcc, luc, False, True, "subB", ["subB/b.txt"])
+
+        self.assertEqual(["top.txt"], luc.untrackedFiles)
+        self.assertEqual(2, len(luc.subCommits))
+
+        subA = luc.subCommits[0]
+        self.assertEqual("subA", subA.repoDir)
+        self.assertEqual(["subA/a.txt"], subA.untrackedFiles)
+
+        subB = luc.subCommits[1]
+        self.assertEqual("subB", subB.repoDir)
+        self.assertEqual(["subB/b.txt"], subB.untrackedFiles)

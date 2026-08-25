@@ -578,6 +578,7 @@ class DiffView(QWidget):
                 self.fetcher.repoDir = commit.repoDir
             else:
                 self.fetcher.cwd = self.branchDir or Git.REPO_DIR
+                self.fetcher.repoDir = None
 
             if commit.sha1 is None:
                 # Untracked file: sha1=None triggers git diff --no-index /dev/null
@@ -595,20 +596,25 @@ class DiffView(QWidget):
                                  self.fetcher.errorData.decode("utf-8"))
 
     def _addUntrackedEntries(self, commit: Commit):
-        untrackedFiles = commit.untrackedFiles
-        if not untrackedFiles:
-            return
+        # Collect untracked files from the top-level commit and all sub-commits.
+        # Each sub-commit carries its own repoDir so we can set the correct cwd
+        # when fetching the diff for its untracked files.
+        owners = [commit] + commit.subCommits
+        for owner in owners:
+            untrackedFiles = owner.untrackedFiles
+            if not untrackedFiles:
+                continue
 
-        repoDir = commit.repoDir
-        for file in untrackedFiles:
-            # Queue via _commitList: sha1=None triggers git diff --no-index.
-            # Difffetcher.parse() will add the file to the list automatically,
-            # and __onDiffAvailable will fix the icon from Added→Untracked.
-            fakeCommit = Commit()
-            fakeCommit.sha1 = None
-            fakeCommit.comments = file
-            fakeCommit.repoDir = repoDir
-            self._commitList.append(fakeCommit)
+            repoDir = owner.repoDir
+            for file in untrackedFiles:
+                # Queue via _commitList: sha1=None triggers git diff --no-index.
+                # Difffetcher.parse() will add the file to the list automatically,
+                # and __onDiffAvailable will fix the icon from Added→Untracked.
+                fakeCommit = Commit()
+                fakeCommit.sha1 = None
+                fakeCommit.comments = file
+                fakeCommit.repoDir = repoDir
+                self._commitList.append(fakeCommit)
 
     def __addToFileListView(self, *args):
         """specify the @row number of the file in the viewer"""
