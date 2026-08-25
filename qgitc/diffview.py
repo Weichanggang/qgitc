@@ -43,7 +43,7 @@ from qgitc.applicationbase import ApplicationBase
 from qgitc.commitsource import CommitSource
 from qgitc.common import *
 from qgitc.difffetcher import DiffFetcher
-from qgitc.diffutils import FileInfo, FileState
+from qgitc.diffutils import DiffType, FileInfo, FileState
 from qgitc.gitutils import Git, GitProcess
 from qgitc.patchviewer import PatchViewer
 
@@ -189,6 +189,9 @@ class DiffView(QWidget):
         self.fetcher = DiffFetcher(self)
         # sub commit to fetch
         self._commitList: List[Commit] = []
+        # Diff blocks keyed by file name, collected during fetch and flushed
+        # in sorted order when all fetches complete.
+        self._pendingDiffs: dict = {}
 
         self._commitSource: CommitSource = None
         self._showingCommit = False
@@ -561,8 +564,31 @@ class DiffView(QWidget):
         self.twMenu.exec(self.fileListView.mapToGlobal(pos))
 
     def __onDiffAvailable(self, lineItems, fileItems):
-        self.__addToFileListView(fileItems)
-        self.viewer.appendLines(lineItems)
+        # Split the block into per-file chunks keyed by file name.
+        # Each chunk starts at a DiffType.File marker and includes all lines
+        # until the next File marker. A leading DiffType.Diff separator line
+        # before the first file is discarded.
+        currentFile = None
+        currentLines = []
+        for diffType, data in lineItems:
+            if diffType == DiffType.File:
+                # Flush previous file chunk
+                if currentFile is not None and currentFile in fileItems:
+                    self._pendingDiffs[currentFile] = (currentLines, fileItems[currentFile])
+                # Decode file name from the line data
+                if isinstance(data, bytes):
+                    currentFile = data.decode("utf-8", errors="replace")
+                else:
+                    currentFile = data
+                currentLines = [(diffType, data)]
+            else:
+                if currentFile is not None:
+                    currentLines.append((diffType, data))
+                # else: skip leading separator lines before first file
+
+        # Flush last file chunk
+        if currentFile is not None and currentFile in fileItems:
+            self._pendingDiffs[currentFile] = (currentLines, fileItems[currentFile])
 
     def __onDiffFileStateChanged(self, filePath: str, newState: FileState):
         self.fileListModel.updateFileState(filePath, newState)
@@ -578,6 +604,7 @@ class DiffView(QWidget):
                 self.fetcher.repoDir = commit.repoDir
             else:
                 self.fetcher.cwd = self.branchDir or Git.REPO_DIR
+                self.fetcher.repoDir = None
 
             if commit.sha1 is None:
                 # Untracked file: sha1=None triggers git diff --no-index /dev/null
@@ -587,6 +614,7 @@ class DiffView(QWidget):
             return
 
         self.fetcher.cwd = self.branchDir or Git.REPO_DIR
+        self._flushPendingDiffs()
         self.viewer.endReading()
         self.endFetch.emit()
 
@@ -594,13 +622,41 @@ class DiffView(QWidget):
             QMessageBox.critical(self, self.window().windowTitle(),
                                  self.fetcher.errorData.decode("utf-8"))
 
-    def _addUntrackedEntries(self, commit: Commit):
-        untrackedFiles = commit.untrackedFiles
-        if not untrackedFiles:
+    def _flushPendingDiffs(self):
+        """Flush pending diff blocks sorted by file name to viewer + file list."""
+        diffs = self._pendingDiffs
+        self._pendingDiffs = {}
+        if not diffs:
             return
 
-        repoDir = commit.repoDir
-        for file in untrackedFiles:
+        row = self.viewer.textLineCount()
+        for fileName in sorted(diffs, key=str.lower):
+            lineItems, info = diffs[fileName]
+            info.row = row
+            self.fileListModel.addFile(fileName, info)
+            self.viewer.appendLines(lineItems)
+            row += len(lineItems)
+
+    def _addUntrackedEntries(self, commit: Commit):
+        # Collect untracked files from the top-level commit and all sub-commits.
+        # Each sub-commit carries its own repoDir so we can set the correct cwd
+        # when fetching the diff for its untracked files.
+        # Sort all untracked entries by file name so they appear in alphabetical
+        # order in both the file list and the diff viewer.
+        entries = []
+        owners = [commit] + commit.subCommits
+        for owner in owners:
+            untrackedFiles = owner.untrackedFiles
+            if not untrackedFiles:
+                continue
+
+            repoDir = owner.repoDir
+            for file in untrackedFiles:
+                entries.append((file, repoDir))
+
+        entries.sort(key=lambda e: e[0].lower())
+
+        for file, repoDir in entries:
             # Queue via _commitList: sha1=None triggers git diff --no-index.
             # Difffetcher.parse() will add the file to the list automatically,
             # and __onDiffAvailable will fix the icon from Added→Untracked.
@@ -773,6 +829,7 @@ class DiffView(QWidget):
     def clear(self):
         self.fileListModel.clear()
         self.viewer.clear()
+        self._pendingDiffs.clear()
         self._updateFilterStatus()
         self.commit = None
         self._delayCommit = None

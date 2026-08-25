@@ -1757,9 +1757,15 @@ class LogView(QAbstractScrollArea, CommitSource):
             self.__resetGraphs()
             self.viewport().update()
 
-        if self.curIdx == 0 and (hasLUC or hasLCC):
-            # force update the diff
-            self.currentIndexChanged.emit(0)
+        if hasLUC or hasLCC:
+            # If the user's selection was provisional (auto-selected newest row)
+            # or there was no selection yet, move to the local changes row (0)
+            # so the diff updates immediately without waiting for fetchFinished.
+            if self.curIdx == -1 or self.__isSelectionProvisional():
+                self.setCurrentIndex(0)
+            elif self.curIdx == 0:
+                # curIdx is already 0 (local changes replaced the row in-place)
+                self.currentIndexChanged.emit(0)
             self.viewport().update()
 
     def __onFetchTooSlow(self, seconds: int):

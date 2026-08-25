@@ -186,17 +186,23 @@ class LogsFetcherWorkerBase(QObject):
                 subCommit.repoDir = repoDir
                 lccCommit.subCommits.append(subCommit)
 
+        # The subCommit (or lucCommit itself) that owns untrackedFiles for this repoDir.
+        # Untracked files must be associated with their originating repoDir so that
+        # _addUntrackedEntries can set the correct cwd when fetching their diff.
+        untrackedOwner = None
         if hasLUC:
             lucCommit.sha1 = Git.LUC_SHA1
             if not lucCommit.repoDir:
                 lucCommit.repoDir = repoDir
+                untrackedOwner = lucCommit
             else:
                 subCommit = Commit()
                 subCommit.sha1 = Git.LUC_SHA1
                 subCommit.repoDir = repoDir
                 lucCommit.subCommits.append(subCommit)
+                untrackedOwner = subCommit
 
-        if untrackedFiles and lucCommit.isValid():
-            if not lucCommit.untrackedFiles:
-                lucCommit.untrackedFiles = []
-            lucCommit.untrackedFiles.extend(untrackedFiles)
+        if untrackedFiles and untrackedOwner is not None:
+            if not untrackedOwner.untrackedFiles:
+                untrackedOwner.untrackedFiles = []
+            untrackedOwner.untrackedFiles.extend(untrackedFiles)
