@@ -162,7 +162,6 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
         self._localChangesTotal = 0
         self._localChangesDone = 0
         self._localChangesEmitted = False
-        self._compositeSubmodules = []
 
         self._quitEventLoopRequested.connect(
             self._quitEventLoop, Qt.QueuedConnection)
@@ -191,7 +190,6 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         # Start local-changes fetcher first (fast: git status) so local
         # changes appear before the log fetch (slow: git log) completes.
-        lcFetcher = None
         if self.needLocalChanges():
             lcFetcher = LocalChangesFetcher(self._branchDir, False)
             lcFetcher.finished.connect(self._onFetchFinished)
@@ -300,7 +298,6 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
         logsArgs = self._args[1]
         paths = extractFilePaths(logsArgs)
         submodules = filterSubmoduleByPath(self._submodules, paths)
-        self._compositeSubmodules = submodules
 
         self._exitCode = 0
         self._cleanupCompositeEmit()

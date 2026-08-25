@@ -573,7 +573,7 @@ class DiffView(QWidget):
         for diffType, data in lineItems:
             if diffType == DiffType.File:
                 # Flush previous file chunk
-                if currentFile is not None:
+                if currentFile is not None and currentFile in fileItems:
                     self._pendingDiffs[currentFile] = (currentLines, fileItems[currentFile])
                 # Decode file name from the line data
                 if isinstance(data, bytes):
