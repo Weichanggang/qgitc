@@ -156,6 +156,14 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         self._queueTasks = []
 
+        # Track local-changes fetcher completion so localChangesAvailable
+        # can be emitted as soon as all LocalChangesFetchers finish, without
+        # waiting for log fetchers to complete.
+        self._localChangesTotal = 0
+        self._localChangesDone = 0
+        self._localChangesEmitted = False
+        self._compositeSubmodules = []
+
         self._quitEventLoopRequested.connect(
             self._quitEventLoop, Qt.QueuedConnection)
 
@@ -181,6 +189,16 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             self._eventLoop = None
             return
 
+        # Start local-changes fetcher first (fast: git status) so local
+        # changes appear before the log fetch (slow: git log) completes.
+        lcFetcher = None
+        if self.needLocalChanges():
+            lcFetcher = LocalChangesFetcher(self._branchDir, False)
+            lcFetcher.finished.connect(self._onFetchFinished)
+            self._fetchers.append(lcFetcher)
+            lcFetcher.fetch()
+            self._localChangesTotal = 1
+
         fetcher = LogsFetcherImpl()
         fetcher.logsAvailable.connect(
             self.logsAvailable)
@@ -190,13 +208,6 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         fetcher.fetch(*self._args)
 
-        lcFetcher = None
-        if self.needLocalChanges():
-            lcFetcher = LocalChangesFetcher(self._branchDir, False)
-            lcFetcher.finished.connect(self._onFetchFinished)
-            self._fetchers.append(lcFetcher)
-            lcFetcher.fetch()
-
         self._eventLoop.exec()
         self._eventLoop = None
 
@@ -205,7 +216,9 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             self._clearFetcher()
             return
 
-        if lcFetcher:
+        # localChangesAvailable was already emitted in _onFetchLocalChangesFinished
+        # as soon as the LocalChangesFetcher finished. Emit here only as a fallback.
+        if not self._localChangesEmitted:
             self.localChangesAvailable.emit(self._lccCommit, self._lucCommit)
 
         self._handleError(fetcher.errorData, fetcher._branch, fetcher.repoDir)
@@ -240,6 +253,15 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
                         repoDir = "."
             LogsFetcherWorkerBase._makeLocalCommits(
                 self._lccCommit, self._lucCommit, hasLCC, hasLUC, repoDir, untracked)
+
+        self._localChangesDone += 1
+        # Emit once all local-changes fetchers are done so local changes
+        # appear before log fetchers complete (they started first and are fast).
+        if (self._localChangesTotal > 0
+                and self._localChangesDone >= self._localChangesTotal
+                and not self._localChangesEmitted):
+            self._localChangesEmitted = True
+            self.localChangesAvailable.emit(self._lccCommit, self._lucCommit)
 
     def _onFetchFinished(self):
         if self.isInterruptionRequested():
@@ -278,12 +300,35 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
         logsArgs = self._args[1]
         paths = extractFilePaths(logsArgs)
         submodules = filterSubmoduleByPath(self._submodules, paths)
+        self._compositeSubmodules = submodules
 
         self._exitCode = 0
         self._cleanupCompositeEmit()
 
         self._eventLoop = QEventLoop()
         MAX_QUEUE_SIZE = 32
+
+        # Start local-changes fetchers first (they are fast: git status),
+        # then log fetchers (they are slow: git log). Both run concurrently,
+        # but local changes get priority for the limited QProcess slots so
+        # they appear at the top of the list as early as possible.
+        if self.needLocalChanges():
+            for submodule in submodules:
+                if self.isInterruptionRequested():
+                    self._clearFetcher()
+                    self._eventLoop = None
+                    return
+
+                fetcher = LocalChangesFetcher(
+                    fullRepoDir(submodule, self._branchDir), True)
+                fetcher.finished.connect(self._onFetchFinished)
+
+                if len(self._fetchers) < MAX_QUEUE_SIZE:
+                    fetcher.fetch()
+                    self._fetchers.append(fetcher)
+                else:
+                    self._queueTasks.append(fetcher)
+            self._localChangesTotal = len(submodules)
 
         for submodule in submodules:
             if self.isInterruptionRequested():
@@ -301,23 +346,6 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             else:
                 self._queueTasks.append(fetcher)
 
-        if self.needLocalChanges():
-            for submodule in submodules:
-                if self.isInterruptionRequested():
-                    self._clearFetcher()
-                    self._eventLoop = None
-                    return
-
-                fetcher = LocalChangesFetcher(
-                    fullRepoDir(submodule, self._branchDir), True)
-                fetcher.finished.connect(self._onFetchFinished)
-
-                if len(self._fetchers) < MAX_QUEUE_SIZE:
-                    fetcher.fetch()
-                    self._fetchers.append(fetcher)
-                else:
-                    self._queueTasks.append(fetcher)
-
         if self.isInterruptionRequested():
             self._clearFetcher()
             self._eventLoop = None
@@ -327,7 +355,8 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         self._eventLoop.exec()
 
-        logger.debug("fetch elapsed: %fs", time.time() - b)
+        logger.debug("fetch elapsed: %fs, localChangesEmitted=%s",
+                     time.time() - b, self._localChangesEmitted)
 
         if self.isInterruptionRequested():
             self._clearFetcher()
@@ -338,7 +367,12 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             return
 
         self._flushCompositeEmit()
-        self.localChangesAvailable.emit(self._lccCommit, self._lucCommit)
+        # localChangesAvailable was already emitted incrementally as each
+        # LocalChangesFetcher finished. Emit here only as a fallback if
+        # there were no local changes fetchers or none had changes.
+        if not self._localChangesEmitted:
+            self.localChangesAvailable.emit(self._lccCommit, self._lucCommit)
+        self._localChangesEmitted = True
 
         for error, _ in self._errors.items():
             self._errorData += error + b'\n'
