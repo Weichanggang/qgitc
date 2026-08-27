@@ -39,6 +39,12 @@ class LogsFetcherWorkerBase(QObject):
         self._mergedRepoDirs: Dict[any, Set[str]] = {}
         # rows added since the last emission; only these get sent downstream
         self._newLogs: List[Commit] = []
+        # Full sorted list of all merged commits, maintained in the worker
+        # thread so the main thread never has to merge.
+        self._allLogs: List[Commit] = []
+        # Commits with future dates (e.g. clock skew) are kept separate and
+        # appended to the end of _allLogs after each emission.
+        self._futureLogs: List[Commit] = []
 
         self._compositeEmitTimer = QTimer(self)
         self._compositeEmitTimer.setSingleShot(True)
@@ -69,12 +75,19 @@ class LogsFetcherWorkerBase(QObject):
 
     def _handleCompositeLogs(self, commits: List[Commit], repoDir: str, branch: bytes,
                              exitCode: int, errorData: bytes):
+        from datetime import datetime as _dt
+        now = _dt.now().timestamp()
         handleCount = 0
 
         for log in commits:
             handleCount += 1
             if handleCount % 100 == 0 and self.isInterruptionRequested():
                 return
+            # Future-dated commits (e.g. clock skew, 2050) are set aside
+            # and appended to the end of the list later.
+            if log.committerDateTime.timestamp() > now:
+                self._futureLogs.append(log)
+                continue
             # require same day at least
             key = (log.committerDateTime.date(),
                    log.comments, log.author)
@@ -112,14 +125,65 @@ class LogsFetcherWorkerBase(QObject):
         return False
 
     def _emitCompositeLogsAvailable(self):
-        """Emit the rows merged since the last emission, newest first."""
+        """Emit the rows merged since the last emission, newest first.
+
+        Performs the merge into _allLogs in the worker thread so the main
+        thread only needs to swap in the new list and remap indices.
+        """
         if not self._newLogs:
             return
         batch = self._newLogs
         self._newLogs = []
         batch.sort(key=lambda x: x.committerDateTime, reverse=True)
+
+        insertPositions = self._mergeIntoAllLogs(batch)
+
+        # Append future-dated commits at the end
+        if self._futureLogs:
+            oldCount = len(self._allLogs)
+            for c in self._futureLogs:
+                insertPositions.append(oldCount)
+                self._allLogs.append(c)
+                oldCount += 1
+            self._futureLogs.clear()
+
         self._awaitingConsumer = True
-        self.logsAvailable.emit(batch)
+        self.logsAvailable.emit((self._allLogs, insertPositions))
+
+    def _mergeIntoAllLogs(self, batch: List[Commit]):
+        """Merge a newest-first batch into _allLogs (two-pointer, O(n+m)).
+
+        Returns insert positions (indices into the old list) for remapping.
+        """
+        old = self._allLogs
+        oldCount = len(old)
+        insertPositions = []
+        merged = []
+        i = 0   # index into old
+        j = 0   # index into batch
+        newCount = len(batch)
+        runStart = i
+        while i < oldCount and j < newCount:
+            if batch[j].committerDateTime > old[i].committerDateTime:
+                if i > runStart:
+                    merged.extend(old[runStart:i])
+                insertPositions.append(i)
+                merged.append(batch[j])
+                j += 1
+                runStart = i
+            else:
+                i += 1
+        if i > runStart:
+            merged.extend(old[runStart:i])
+        while j < newCount:
+            insertPositions.append(i)
+            merged.append(batch[j])
+            j += 1
+        if i < oldCount:
+            merged.extend(old[i:])
+
+        self._allLogs = merged
+        return insertPositions
 
     def _scheduleCompositeEmit(self):
         """Schedule a batched incremental emission after _COMPOSITE_EMIT_INTERVAL_MS.
@@ -168,6 +232,8 @@ class LogsFetcherWorkerBase(QObject):
         self._mergedLogs.clear()
         self._mergedRepoDirs.clear()
         self._newLogs.clear()
+        self._allLogs.clear()
+        self._futureLogs.clear()
 
     @property
     def errorData(self):
