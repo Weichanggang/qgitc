@@ -452,7 +452,12 @@ class TestLogWindow(TestLogWindowBase):
         self.wait(50)
 
         self.assertEqual(logView.getCount(), 3)
-        self.assertEqual(3, sum(len(batch) for batch in batches),
+        # Each batch is (allLogs, insertPositions); the final allLogs should
+        # contain all 3 rows, and insertPositions across batches should sum
+        # to 3 (each row inserted exactly once).
+        totalInserted = sum(len(payload[1]) for payload in batches
+                            if isinstance(payload, tuple))
+        self.assertEqual(3, totalInserted,
                          "batches must partition the rows, not repeat them")
 
     def testCompositeSelectionFollowsCommit(self):
@@ -483,7 +488,10 @@ class TestLogWindow(TestLogWindowBase):
         newer.repoDir = "."
         newer.committerDateTime = logView.getCommit(
             0).committerDateTime + timedelta(minutes=5)
-        logView.fetcher.logsAvailable.emit([newer])
+        # Simulate worker thread: merge into allLogs and emit tuple
+        allLogs = [newer] + logView.data
+        insertPositions = [0]
+        logView.fetcher.logsAvailable.emit((allLogs, insertPositions))
 
         self.assertEqual(2, logView.currentIndex())
         self.assertIs(commit, logView.getCommit(logView.currentIndex()))
