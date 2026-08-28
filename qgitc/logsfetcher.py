@@ -64,29 +64,28 @@ class LogsFetcher(QObject):
             self._worker.localChangesAvailable.disconnect(
                 self._onLocalChangesAvailable)
             self._worker.requestInterruption()
-            # Defer _worker cleanup to _onThreadFinished to avoid
-            # QBasicTimer cross-thread warnings, but clear the
-            # attribute now so fetch() knows a new worker is needed.
-            # _pendingWorkers keeps the ref alive until the thread stops.
             self._worker = None
 
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-
-            if force and ApplicationBase.instance().terminateThread(self._thread):
-                self._threads.remove(self._thread)
-                self._thread.finished.disconnect(self._onThreadFinished)
-                worker = self._pendingWorkers.pop(self._thread, None)
-                if worker:
-                    worker.deleteLater()
-                logger.warning("Terminating logs fetcher thread")
-                self._thread = None
+        if self._thread:
+            if self._thread.isRunning():
+                self._thread.quit()
+                if force and ApplicationBase.instance().terminateThread(self._thread):
+                    self._threads.remove(self._thread)
+                    worker = self._pendingWorkers.pop(self._thread, None)
+                    if worker:
+                        worker.deleteLater()
+                    logger.warning("Terminating logs fetcher thread")
+            # If thread is not running, _onThreadFinished should have
+            # already cleaned up _threads and _pendingWorkers.
+            self._thread = None
 
         if not force:
             return
 
         for thread in self._threads:
-            thread.finished.disconnect(self._onThreadFinished)
+            worker = self._pendingWorkers.pop(thread, None)
+            if worker:
+                worker.deleteLater()
             ApplicationBase.instance().terminateThread(thread)
         self._threads.clear()
 
