@@ -83,9 +83,10 @@ class LogsFetcherWorkerBase(QObject):
             handleCount += 1
             if handleCount % 100 == 0 and self.isInterruptionRequested():
                 return
-            # Future-dated commits (e.g. clock skew, 2050) are set aside
-            # and appended to the end of the list later.
-            if log.committerDateTime.timestamp() > now:
+            # Commits with no date or future dates (e.g. clock skew, 2050)
+            # are set aside and appended to the end of the list later.
+            dt = log.committerDateTime
+            if dt is None or dt.timestamp() > now:
                 self._futureLogs.append(log)
                 continue
             # require same day at least
@@ -164,7 +165,10 @@ class LogsFetcherWorkerBase(QObject):
         newCount = len(batch)
         runStart = i
         while i < oldCount and j < newCount:
-            if batch[j].committerDateTime > old[i].committerDateTime:
+            # Treat None committerDateTime as oldest (sorts to end)
+            batchDt = batch[j].committerDateTime
+            oldDt = old[i].committerDateTime
+            if batchDt is not None and (oldDt is None or batchDt > oldDt):
                 if i > runStart:
                     merged.extend(old[runStart:i])
                 insertPositions.append(i)
