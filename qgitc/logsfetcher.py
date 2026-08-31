@@ -35,6 +35,8 @@ class LogsFetcher(QObject):
     def fetch(self, *args, branchDir=None):
         self.cancel()
         self._errorData = b''
+        logger.debug("LogsFetcher.fetch: threads=%d pending=%d",
+                     len(self._threads), len(self._pendingWorkers))
         # always detect local changes for single repo
         noLocalChanges = len(self._submodules) > 0 and not ApplicationBase.instance(
         ).settings().detectLocalChanges()
@@ -135,6 +137,8 @@ class LogsFetcher(QObject):
 
     def _onThreadFinished(self):
         thread = self.sender()
+        logger.debug("_onThreadFinished: thread=%s in_threads=%s pending=%d",
+                     thread, thread in self._threads, len(self._pendingWorkers))
         if thread in self._threads:
             self._threads.remove(thread)
         # Clean up the worker now that its thread has fully stopped.
