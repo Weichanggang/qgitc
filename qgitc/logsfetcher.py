@@ -149,6 +149,12 @@ class LogsFetcher(QObject):
             # and waits for the Python GIL, while the GUI thread holds the
             # GIL and waits for those Qt locks.
             worker.releaseFinishedFetchers()
+            # The thread has fully stopped, so dropping the worker's
+            # retained data cannot race with it. This is the safety net for
+            # paths that skip the end-of-fetch release (e.g. a run() that
+            # raised); without it a lingering worker wrapper would retain
+            # the whole commit set.
+            worker.releaseData()
             worker.deleteLater()
         if thread is self._thread:
             self._worker = None

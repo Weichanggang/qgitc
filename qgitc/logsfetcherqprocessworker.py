@@ -232,6 +232,10 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             self._errorData.rstrip(b'\n')
 
         self.fetchFinished.emit(fetcher._exitCode)
+        # The local-change commits were emitted and are owned by the
+        # consumer now; drop our references.
+        self._lccCommit = Commit()
+        self._lucCommit = Commit()
 
     def _onFetchLogsFinished(self, fetcher: LogsFetcherImpl):
         repoDir = fetcher.repoDir
@@ -386,6 +390,22 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         self._eventLoop = None
         self.fetchFinished.emit(self._exitCode)
+        # All data-carrying signals have been queued and are owned by their
+        # receivers now; drop our copy so a lingering worker wrapper does
+        # not retain the whole commit set (see _releaseCompositeData).
+        self._releaseCompositeData()
+        self._lccCommit = Commit()
+        self._lucCommit = Commit()
+
+    def releaseData(self):
+        """Release fetch data retained by this worker (see base class).
+
+        Also drops the local-change commits: they were emitted to the
+        consumer, which keeps its own references.
+        """
+        super().releaseData()
+        self._lccCommit = Commit()
+        self._lucCommit = Commit()
 
     def requestInterruption(self):
         self._interruptionRequested = True

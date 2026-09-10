@@ -239,6 +239,32 @@ class LogsFetcherWorkerBase(QObject):
         self._allLogs.clear()
         self._futureLogs.clear()
 
+    def _releaseCompositeData(self):
+        """Drop the accumulated composite data after the fetch completes.
+
+        Rebind instead of clearing in place: the last emitted batch is
+        owned by the queued signal payload (and the view's data list), so
+        those objects survive there. Without this, a finished worker
+        retains the full commit set — hundreds of thousands of Commit
+        objects on large composite repos — until the worker itself is
+        destroyed, which may never happen because its DeferredDelete is
+        queued to a thread that no longer runs an event loop.
+        """
+        self._mergedLogs = {}
+        self._mergedRepoDirs = {}
+        self._newLogs = []
+        self._allLogs = []
+        self._futureLogs = []
+
+    def releaseData(self):
+        """Release fetch data retained by this worker.
+
+        Only call after the worker thread has stopped (e.g. from the GUI
+        thread's thread-finished handler): rebinding these containers
+        while the worker is still merging would race with it.
+        """
+        self._releaseCompositeData()
+
     @property
     def errorData(self):
         return self._errorData
