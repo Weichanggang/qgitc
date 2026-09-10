@@ -1519,10 +1519,12 @@ class LogView(QAbstractScrollArea, CommitSource):
             while pinned < len(self.data) and \
                     self.data[pinned].committerDateTime is None:
                 pinned += 1
-            if pinned > 0:
-                self.data = self.data[:pinned] + allLogs
-            else:
-                self.data = allLogs
+            # Always build a NEW list; never alias the worker's _allLogs.
+            # This view mutates self.data in place (local-change rows in
+            # __onLocalChangesAvailable, clear()), and the worker mutates and
+            # reads _allLogs concurrently (merge, _cleanupCompositeEmit) —
+            # aliasing would let either side corrupt the other's list.
+            self.data = self.data[:pinned] + allLogs
 
             # insertPositions are indices into allLogs (without pinned);
             # shift by pinned to match self.data which has pinned prepended
