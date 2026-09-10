@@ -106,6 +106,22 @@ class TestLogViewCompositeMerge(TestBase):
 
         self.assertIsNot(batch, self._logView.data)
 
+    def testLogViewNeverAliasesWorkerAllLogs(self):
+        """The view must not alias the worker's _allLogs list either: the view
+        mutates self.data in place (local-change rows, clear()) while the
+        worker concurrently reads and clears _allLogs — aliasing corrupts
+        both sides."""
+        self._emit([self._commit("a", 10)])
+        self._emit([self._commit("b", 5)])
+
+        # The second emission passes (allLogs, insertPositions); the view
+        # must have taken a copy, not the worker's list object.
+        self.assertIsNot(self._allLogs, self._logView.data)
+        self.assertEqual(
+            [c.sha1[0] for c in self._allLogs],
+            [c.sha1[0] for c in self._logView.data],
+            "contents must match despite the copy")
+
     def testSecondBatchMergesInOrder(self):
         c1 = self._commit("a", 10)
         c2 = self._commit("b", 30)

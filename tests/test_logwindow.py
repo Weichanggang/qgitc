@@ -101,6 +101,29 @@ class TestLogWindow(TestLogWindowBase):
         self.window.cancel(True)
         self.processEvents()
 
+    def testSubmoduleAvailableReloadsLogView(self):
+        """Regression: the log view created during the LogWindow's own
+        construction never connected to submoduleAvailable (logWindow()
+        returns None mid-construction), so a finished submodule scan could
+        not reload the view into composite mode on first open of a repo.
+        """
+        self.waitForLoaded()
+
+        logview = self.window.ui.gitViewA.ui.logView
+        # keep app.submodules empty while toggling the setting so that
+        # compositeModeChanged does not trigger a reload itself
+        self.app._submodules = []
+        self.app.settings().setCompositeMode(True)
+        self.app._submodules = ["."]
+
+        spyBegin = QSignalSpy(logview.beginFetch)
+        self.app.submoduleAvailable.emit(["."], False)
+        self.processEvents()
+
+        self.assertEqual(1, spyBegin.count())
+        logview.fetcher.cancel(True)
+        self.processEvents()
+
     def testLocalChanges(self):
         self.waitForLoaded()
 

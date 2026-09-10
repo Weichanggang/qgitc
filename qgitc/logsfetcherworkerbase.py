@@ -83,9 +83,10 @@ class LogsFetcherWorkerBase(QObject):
             handleCount += 1
             if handleCount % 100 == 0 and self.isInterruptionRequested():
                 return
-            # Future-dated commits (e.g. clock skew, 2050) are set aside
-            # and appended to the end of the list later.
-            if log.committerDateTime.timestamp() > now:
+            # Commits with no date or future dates (e.g. clock skew, 2050)
+            # are set aside and appended to the end of the list later.
+            dt = log.committerDateTime
+            if dt is None or dt.timestamp() > now:
                 self._futureLogs.append(log)
                 continue
             # require same day at least
@@ -164,7 +165,10 @@ class LogsFetcherWorkerBase(QObject):
         newCount = len(batch)
         runStart = i
         while i < oldCount and j < newCount:
-            if batch[j].committerDateTime > old[i].committerDateTime:
+            # Treat None committerDateTime as oldest (sorts to end)
+            batchDt = batch[j].committerDateTime
+            oldDt = old[i].committerDateTime
+            if batchDt is not None and (oldDt is None or batchDt > oldDt):
                 if i > runStart:
                     merged.extend(old[runStart:i])
                 insertPositions.append(i)
@@ -234,6 +238,32 @@ class LogsFetcherWorkerBase(QObject):
         self._newLogs.clear()
         self._allLogs.clear()
         self._futureLogs.clear()
+
+    def _releaseCompositeData(self):
+        """Drop the accumulated composite data after the fetch completes.
+
+        Rebind instead of clearing in place: the last emitted batch is
+        owned by the queued signal payload (and the view's data list), so
+        those objects survive there. Without this, a finished worker
+        retains the full commit set — hundreds of thousands of Commit
+        objects on large composite repos — until the worker itself is
+        destroyed, which may never happen because its DeferredDelete is
+        queued to a thread that no longer runs an event loop.
+        """
+        self._mergedLogs = {}
+        self._mergedRepoDirs = {}
+        self._newLogs = []
+        self._allLogs = []
+        self._futureLogs = []
+
+    def releaseData(self):
+        """Release fetch data retained by this worker.
+
+        Only call after the worker thread has stopped (e.g. from the GUI
+        thread's thread-finished handler): rebinding these containers
+        while the worker is still merging would race with it.
+        """
+        self._releaseCompositeData()
 
     @property
     def errorData(self):

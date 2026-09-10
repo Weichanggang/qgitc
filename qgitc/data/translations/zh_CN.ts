@@ -3497,6 +3497,11 @@ Please checkout the branch first.</source>
         <translation>显示父子记录</translation>
     </message>
     <message>
+        <location filename="../../preferences.ui" line="306"/>
+        <source>Sort files by name</source>
+        <translation>按文件名排序</translation>
+    </message>
+    <message>
         <location filename="../../preferences.ui" line="477"/>
         <source>Composite Mode</source>
         <translation>聚合模式</translation>

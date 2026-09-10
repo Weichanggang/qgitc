@@ -140,6 +140,69 @@ class TestLogsFetcherQProcessWorker(TestBase):
         self.assertEqual(lucCommit.sha1, Git.LUC_SHA1)
         self.assertIn("untracked.py", lucCommit.untrackedFiles)
 
+    def testCompositeDataReleasedAfterFetch(self):
+        """A completed composite fetch must not retain the dataset.
+
+        The worker wrapper can outlive the fetch indefinitely (its
+        destruction is deferred to a thread that no longer runs), so
+        retaining _allLogs/_mergedLogs would leak the whole commit set on
+        every reload.
+        """
+        submodules = [".", "subRepo"]
+        worker = LogsFetcherQProcessWorker(
+            submodules, self.gitDir.name, False, "main", None)
+        spyFinished = QSignalSpy(worker.fetchFinished)
+        spyLogsAvailable = QSignalSpy(worker.logsAvailable)
+        spyLocalChangesAvailable = QSignalSpy(worker.localChangesAvailable)
+        worker.run()
+
+        self.wait(100, lambda: spyFinished.count() == 0)
+        self.assertEqual(spyFinished.count(), 1)
+
+        # the emitted payload is owned by the receiver and must survive
+        allLogs, _ = spyLogsAvailable.at(0)[0]
+        self.assertEqual(len(allLogs), 3)
+
+        # ... but the worker itself must not retain the data
+        self.assertEqual(len(worker._allLogs), 0)
+        self.assertEqual(len(worker._mergedLogs), 0)
+        self.assertEqual(len(worker._mergedRepoDirs), 0)
+        self.assertEqual(len(worker._newLogs), 0)
+        self.assertEqual(len(worker._futureLogs), 0)
+
+        # local-change commits were emitted; the worker must drop its refs
+        self.assertEqual(spyLocalChangesAvailable.count(), 1)
+        emittedLcc = spyLocalChangesAvailable.at(0)[0]
+        self.assertIsNot(worker._lccCommit, emittedLcc)
+
+    def testReleaseDataDropsRetainedState(self):
+        """releaseData() drops data retained by a finished worker.
+
+        It is the belt-and-braces cleanup for paths that skip the
+        end-of-fetch release (e.g. a run() that raised). Only valid once
+        the worker thread has stopped; rebinding while the worker is still
+        merging would race with it.
+        """
+        worker = LogsFetcherQProcessWorker(
+            ["."], self.gitDir.name, False, "main", None)
+        worker._allLogs = [Commit(), Commit()]
+        worker._mergedLogs = {"k": Commit()}
+        worker._mergedRepoDirs = {"k": {"."}}
+        worker._newLogs = [Commit()]
+        worker._futureLogs = [Commit()]
+        oldLcc = worker._lccCommit
+        oldLuc = worker._lucCommit
+
+        worker.releaseData()
+
+        self.assertEqual(len(worker._allLogs), 0)
+        self.assertEqual(len(worker._mergedLogs), 0)
+        self.assertEqual(len(worker._mergedRepoDirs), 0)
+        self.assertEqual(len(worker._newLogs), 0)
+        self.assertEqual(len(worker._futureLogs), 0)
+        self.assertIsNot(worker._lccCommit, oldLcc)
+        self.assertIsNot(worker._lucCommit, oldLuc)
+
     def testRequestInterruptionQuitsEventLoopOnWorkerThread(self):
         class StrictEventLoop:
             def __init__(self, ownerThread):
@@ -203,9 +266,11 @@ class TestLogsFetcherQProcessWorker(TestBase):
 
     def testFinishedFetchersKeptAliveUntilCleanup(self):
         """After _onFetchFinished removes a fetcher, it must be kept alive via
-        _finishedFetchers (with deleteLater) to prevent Python GC from destroying
-        QProcess children (with internal QBasicTimers) on a potentially different
-        thread, which produces:
+        _finishedFetchers (no deleteLater in the worker thread — that
+        deadlocks against the GUI thread) until releaseFinishedFetchers() is
+        called from the GUI thread, preventing Python GC from destroying
+        QProcess children (with internal QBasicTimers) on a potentially
+        different thread, which produces:
           "QBasicTimer::stop: Failed. Possibly trying to stop from a different thread"
         """
         submodules = [".", "subRepo"]
@@ -217,9 +282,13 @@ class TestLogsFetcherQProcessWorker(TestBase):
         self.wait(2000, lambda: spyFinished.count() == 0)
         self.assertEqual(spyFinished.count(), 1)
 
-        # Verify that finished fetchers were tracked and then cleared
+        # Fetchers must stay alive after run() — they are only released by
+        # the GUI thread via releaseFinishedFetchers().
+        self.assertGreater(len(worker._finishedFetchers), 0,
+                           "_finishedFetchers must keep fetchers alive after run()")
+        worker.releaseFinishedFetchers()
         self.assertEqual(len(worker._finishedFetchers), 0,
-                         "_finishedFetchers must be cleared after success")
+                         "_finishedFetchers must be cleared by releaseFinishedFetchers()")
 
         # Verify with gc pressure: create a worker, set low GC threshold,
         # run to completion, and confirm no crash or missing entries
@@ -235,8 +304,11 @@ class TestLogsFetcherQProcessWorker(TestBase):
 
             self.wait(5000, lambda: spyFinished2.count() == 0)
             self.assertEqual(spyFinished2.count(), 1)
+            self.assertGreater(len(worker2._finishedFetchers), 0,
+                               "fetchers must survive GC pressure until released")
+            worker2.releaseFinishedFetchers()
             self.assertEqual(len(worker2._finishedFetchers), 0,
-                             "_finishedFetchers must be cleared after success")
+                             "_finishedFetchers must be cleared by releaseFinishedFetchers()")
         finally:
             gc.set_threshold(*oldThresholds)
             gc.collect()

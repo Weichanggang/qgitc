@@ -3,6 +3,7 @@
 import os
 
 from PySide6.QtCore import QEventLoop, QProcess, QThread
+from shiboken6 import Shiboken
 
 from qgitc.common import logger
 from qgitc.gitutils import Git, GitProcess
@@ -73,9 +74,27 @@ class FindSubmoduleThread(QThread):
         process = QProcess()
         process.setWorkingDirectory(self._repoDir)
         process.finished.connect(self._eventLoop.quit)
+        # A failed start emits errorOccurred and never finished; without
+        # quitting on it the wait below would block until interrupted and
+        # submodules would never be discovered (e.g. broken git binary).
+        process.errorOccurred.connect(self._eventLoop.quit)
         args = ["submodule", "foreach", "--quiet", "echo $name"]
         process.start(GitProcess.GIT_BIN, args)
-        self._eventLoop.exec()
+        if process.state() != QProcess.ProcessState.NotRunning:
+            # On Windows a failed start is reported synchronously from
+            # start() (errorOccurred above), so only wait when it actually
+            # started; a quit delivered before exec() may be lost.
+            self._eventLoop.exec()
+        # Drop the loop here so it is destroyed in this (worker) thread;
+        # keeping it as an instance attribute would destroy it later from
+        # the GUI thread or at interpreter teardown — cross-thread QObject
+        # destruction.
+        self._eventLoop = None
+
+        if not Shiboken.isValid(process):
+            # The interpreter is tearing down and already destroyed the
+            # underlying C++ object; bail out without touching it.
+            return
 
         if self.isInterruptionRequested():
             if process.state() == QProcess.ProcessState.Running:

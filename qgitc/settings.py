@@ -524,6 +524,12 @@ class Settings(QSettings):
     def setShowParentChild(self, show):
         self.setValue("showParentChild", show)
 
+    def sortDiffByFile(self):
+        return self.value("sortDiffByFile", False, type=bool)
+
+    def setSortDiffByFile(self, sort):
+        self.setValue("sortDiffByFile", sort)
+
     def colorSchemaMode(self):
         return self.value("colorSchemaMode", 0, type=int)
 

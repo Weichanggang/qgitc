@@ -175,7 +175,13 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
     def _onFetchNormalLogsFinished(self):
         fetcher = self.sender()
         self._fetchers.remove(fetcher)
-        fetcher.deleteLater()
+        # Do NOT call fetcher.deleteLater() here: the DeferredDelete would be
+        # processed by this thread's event loop with the GIL released, and
+        # destroying the QObject acquires Qt locks while Shiboken waits for
+        # the GIL — deadlocking against the GUI thread which holds the GIL
+        # while waiting for those Qt locks. The fetcher stays alive in
+        # _finishedFetchers and is released in the GUI thread by
+        # releaseFinishedFetchers().
         self._finishedFetchers.append(fetcher)
         if not self._fetchers and self._eventLoop:
             self._eventLoop.quit()
@@ -226,7 +232,10 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             self._errorData.rstrip(b'\n')
 
         self.fetchFinished.emit(fetcher._exitCode)
-        self._finishedFetchers.clear()
+        # The local-change commits were emitted and are owned by the
+        # consumer now; drop our references.
+        self._lccCommit = Commit()
+        self._lucCommit = Commit()
 
     def _onFetchLogsFinished(self, fetcher: LogsFetcherImpl):
         repoDir = fetcher.repoDir
@@ -269,7 +278,8 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         fetcher = self.sender()
         self._fetchers.remove(fetcher)
-        fetcher.deleteLater()
+        # Do NOT deleteLater() here — see the comment in
+        # _onFetchNormalLogsFinished. Released in the GUI thread instead.
         self._finishedFetchers.append(fetcher)
 
         if self._queueTasks:
@@ -380,7 +390,22 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
 
         self._eventLoop = None
         self.fetchFinished.emit(self._exitCode)
-        self._finishedFetchers.clear()
+        # All data-carrying signals have been queued and are owned by their
+        # receivers now; drop our copy so a lingering worker wrapper does
+        # not retain the whole commit set (see _releaseCompositeData).
+        self._releaseCompositeData()
+        self._lccCommit = Commit()
+        self._lucCommit = Commit()
+
+    def releaseData(self):
+        """Release fetch data retained by this worker (see base class).
+
+        Also drops the local-change commits: they were emitted to the
+        consumer, which keeps its own references.
+        """
+        super().releaseData()
+        self._lccCommit = Commit()
+        self._lucCommit = Commit()
 
     def requestInterruption(self):
         self._interruptionRequested = True
@@ -399,9 +424,27 @@ class LogsFetcherQProcessWorker(LogsFetcherWorkerBase):
             self._eventLoop.quit()
 
     def _clearFetcher(self):
-        self._queueTasks.clear()
         for fetcher in self._fetchers:
             fetcher.cancel()
+        # Keep every fetcher alive: destroying QObjects in this worker thread
+        # can deadlock against the GUI thread (this thread would hold the
+        # Python GIL while acquiring Qt object locks that the GUI thread may
+        # hold while waiting for the GIL). They are released in the GUI
+        # thread by releaseFinishedFetchers() once this thread has stopped.
+        self._finishedFetchers.extend(self._fetchers)
         self._fetchers.clear()
-        self._finishedFetchers.clear()
+        self._finishedFetchers.extend(self._queueTasks)
+        self._queueTasks.clear()
         self._cleanupCompositeEmit()
+
+    def releaseFinishedFetchers(self):
+        """Drop references to all fetchers so they are destroyed.
+
+        Must be called from the GUI thread after the worker thread has
+        stopped. Destroying the fetchers (and their QProcess children) in
+        the worker thread deadlocks: the worker would hold the Python GIL
+        while acquiring Qt object locks that the GUI thread may hold while
+        waiting for the GIL (e.g. inside QMetaObject::activate delivering a
+        signal to a Python slot).
+        """
+        self._finishedFetchers.clear()

@@ -678,9 +678,15 @@ class LogView(QAbstractScrollArea, CommitSource):
         app.settings().logViewFontChanged.connect(self.updateSettings)
         app.settings().compositeModeChanged.connect(self.__onCompositeModeChanged)
 
-        logWindow = self.logWindow()
-        if logWindow:
-            app.submoduleAvailable.connect(self.__onSubmoduleAvailable)
+        # Do NOT gate this on logWindow(): during the LogWindow's own
+        # construction (which creates this view) getWindow(LogWindow, False)
+        # still returns None, so the connection would never be made for the
+        # main log view — a finished submodule scan could not reload it into
+        # composite mode on first open of a repo. Connect unconditionally
+        # instead: __onCompositeModeChanged already no-ops for non-standalone
+        # views (commit panel, blame view), same as compositeModeChanged
+        # above.
+        app.submoduleAvailable.connect(self.__onSubmoduleAvailable)
 
         self._finder.resultAvailable.connect(
             self.__onFindResultAvailable)
@@ -1519,10 +1525,12 @@ class LogView(QAbstractScrollArea, CommitSource):
             while pinned < len(self.data) and \
                     self.data[pinned].committerDateTime is None:
                 pinned += 1
-            if pinned > 0:
-                self.data = self.data[:pinned] + allLogs
-            else:
-                self.data = allLogs
+            # Always build a NEW list; never alias the worker's _allLogs.
+            # This view mutates self.data in place (local-change rows in
+            # __onLocalChangesAvailable, clear()), and the worker mutates and
+            # reads _allLogs concurrently (merge, _cleanupCompositeEmit) —
+            # aliasing would let either side corrupt the other's list.
+            self.data = self.data[:pinned] + allLogs
 
             # insertPositions are indices into allLogs (without pinned);
             # shift by pinned to match self.data which has pinned prepended
