@@ -35,8 +35,6 @@ class LogsFetcher(QObject):
     def fetch(self, *args, branchDir=None):
         self.cancel()
         self._errorData = b''
-        logger.debug("LogsFetcher.fetch: threads=%d pending=%d",
-                     len(self._threads), len(self._pendingWorkers))
         # always detect local changes for single repo
         noLocalChanges = len(self._submodules) > 0 and not ApplicationBase.instance(
         ).settings().detectLocalChanges()
@@ -75,6 +73,7 @@ class LogsFetcher(QObject):
                     self._threads.remove(self._thread)
                     worker = self._pendingWorkers.pop(self._thread, None)
                     if worker:
+                        worker.releaseFinishedFetchers()
                         worker.deleteLater()
                     logger.warning("Terminating logs fetcher thread")
             # If thread is not running, _onThreadFinished should have
@@ -87,6 +86,7 @@ class LogsFetcher(QObject):
         for thread in self._threads:
             worker = self._pendingWorkers.pop(thread, None)
             if worker:
+                worker.releaseFinishedFetchers()
                 worker.deleteLater()
             ApplicationBase.instance().terminateThread(thread)
         self._threads.clear()
@@ -137,8 +137,6 @@ class LogsFetcher(QObject):
 
     def _onThreadFinished(self):
         thread = self.sender()
-        logger.debug("_onThreadFinished: thread=%s in_threads=%s pending=%d",
-                     thread, thread in self._threads, len(self._pendingWorkers))
         if thread in self._threads:
             self._threads.remove(thread)
         # Clean up the worker now that its thread has fully stopped.
@@ -146,6 +144,11 @@ class LogsFetcher(QObject):
         # (with internal QBasicTimer) while the thread is still running.
         worker = self._pendingWorkers.pop(thread, None)
         if worker:
+            # Destroy the fetchers in the GUI thread. Destroying QObjects in
+            # the worker thread deadlocks: the worker holds Qt object locks
+            # and waits for the Python GIL, while the GUI thread holds the
+            # GIL and waits for those Qt locks.
+            worker.releaseFinishedFetchers()
             worker.deleteLater()
         if thread is self._thread:
             self._worker = None

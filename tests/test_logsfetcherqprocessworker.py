@@ -203,9 +203,11 @@ class TestLogsFetcherQProcessWorker(TestBase):
 
     def testFinishedFetchersKeptAliveUntilCleanup(self):
         """After _onFetchFinished removes a fetcher, it must be kept alive via
-        _finishedFetchers (with deleteLater) to prevent Python GC from destroying
-        QProcess children (with internal QBasicTimers) on a potentially different
-        thread, which produces:
+        _finishedFetchers (no deleteLater in the worker thread — that
+        deadlocks against the GUI thread) until releaseFinishedFetchers() is
+        called from the GUI thread, preventing Python GC from destroying
+        QProcess children (with internal QBasicTimers) on a potentially
+        different thread, which produces:
           "QBasicTimer::stop: Failed. Possibly trying to stop from a different thread"
         """
         submodules = [".", "subRepo"]
@@ -217,9 +219,13 @@ class TestLogsFetcherQProcessWorker(TestBase):
         self.wait(2000, lambda: spyFinished.count() == 0)
         self.assertEqual(spyFinished.count(), 1)
 
-        # Verify that finished fetchers were tracked and then cleared
+        # Fetchers must stay alive after run() — they are only released by
+        # the GUI thread via releaseFinishedFetchers().
+        self.assertGreater(len(worker._finishedFetchers), 0,
+                           "_finishedFetchers must keep fetchers alive after run()")
+        worker.releaseFinishedFetchers()
         self.assertEqual(len(worker._finishedFetchers), 0,
-                         "_finishedFetchers must be cleared after success")
+                         "_finishedFetchers must be cleared by releaseFinishedFetchers()")
 
         # Verify with gc pressure: create a worker, set low GC threshold,
         # run to completion, and confirm no crash or missing entries
@@ -235,8 +241,11 @@ class TestLogsFetcherQProcessWorker(TestBase):
 
             self.wait(5000, lambda: spyFinished2.count() == 0)
             self.assertEqual(spyFinished2.count(), 1)
+            self.assertGreater(len(worker2._finishedFetchers), 0,
+                               "fetchers must survive GC pressure until released")
+            worker2.releaseFinishedFetchers()
             self.assertEqual(len(worker2._finishedFetchers), 0,
-                             "_finishedFetchers must be cleared after success")
+                             "_finishedFetchers must be cleared by releaseFinishedFetchers()")
         finally:
             gc.set_threshold(*oldThresholds)
             gc.collect()
