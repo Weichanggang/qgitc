@@ -192,6 +192,14 @@ class DiffView(QWidget):
         # Diff blocks keyed by file name, collected during fetch and flushed
         # in sorted order when all fetches complete.
         self._pendingDiffs: dict = {}
+        # Per-file split state persisting across incremental parse() chunks:
+        # QProcess delivers stdout in several readyRead chunks, so a single
+        # file's diff commonly spans multiple __onDiffAvailable calls, and
+        # continuation chunks carry no DiffType.File marker for the file they
+        # belong to.
+        self._splitFile: str = None
+        self._splitInfo: FileInfo = None
+        self._splitLines: list = []
 
         self._commitSource: CommitSource = None
         self._showingCommit = False
@@ -564,33 +572,40 @@ class DiffView(QWidget):
         self.twMenu.exec(self.fileListView.mapToGlobal(pos))
 
     def __onDiffAvailable(self, lineItems, fileItems):
-        # Split the block into per-file chunks keyed by file name.
-        # Each chunk starts at a DiffType.File marker and includes all lines
-        # until the next File marker. A leading DiffType.Diff separator line
-        # before the first file is discarded.
-        currentFile = None
-        currentLines = []
+        # Accumulate per-file chunks. A single file's diff may span several
+        # parse() calls (QProcess delivers output in chunks); continuation
+        # chunks contain no DiffType.File marker, so the split state must
+        # persist across calls.
         for diffType, data in lineItems:
             if diffType == DiffType.File:
-                # Flush previous file chunk
-                if currentFile is not None and currentFile in fileItems:
-                    self._pendingDiffs[currentFile] = (currentLines, fileItems[currentFile])
-                # Decode file name from the line data
+                self._flushSplitFile()
                 if isinstance(data, bytes):
-                    currentFile = data.decode("utf-8", errors="replace")
+                    self._splitFile = data.decode("utf-8", errors="replace")
                 else:
-                    currentFile = data
-                currentLines = [(diffType, data)]
-            else:
-                if currentFile is not None:
-                    currentLines.append((diffType, data))
-                # else: skip leading separator lines before first file
+                    self._splitFile = data
+                # The FileInfo is created in the same parse() call as the
+                # marker, so it is in this chunk's fileItems.
+                self._splitInfo = fileItems.get(self._splitFile)
+                self._splitLines = [(diffType, data)]
+            elif self._splitFile is not None:
+                self._splitLines.append((diffType, data))
+            # else: skip leading separator lines before the first file marker
 
-        # Flush last file chunk
-        if currentFile is not None and currentFile in fileItems:
-            self._pendingDiffs[currentFile] = (currentLines, fileItems[currentFile])
+    def _flushSplitFile(self):
+        """Move the accumulated split state into _pendingDiffs."""
+        if self._splitFile is not None and self._splitInfo is not None:
+            self._pendingDiffs[self._splitFile] = (
+                self._splitLines, self._splitInfo)
+        self._splitFile = None
+        self._splitInfo = None
+        self._splitLines = []
 
     def __onDiffFileStateChanged(self, filePath: str, newState: FileState):
+        # The file is not in the file list until _flushPendingDiffs, so also
+        # apply the state to the pending FileInfo (state lines arrive right
+        # after the marker, i.e. while the file is still being split).
+        if filePath == self._splitFile and self._splitInfo is not None:
+            self._splitInfo.state = newState
         self.fileListModel.updateFileState(filePath, newState)
 
     def __onFetchFinished(self, exitCode):
@@ -624,6 +639,8 @@ class DiffView(QWidget):
 
     def _flushPendingDiffs(self):
         """Flush pending diff blocks sorted by file name to viewer + file list."""
+        # The last file's diff has no following marker; flush it too.
+        self._flushSplitFile()
         diffs = self._pendingDiffs
         self._pendingDiffs = {}
         if not diffs:
@@ -830,6 +847,9 @@ class DiffView(QWidget):
         self.fileListModel.clear()
         self.viewer.clear()
         self._pendingDiffs.clear()
+        self._splitFile = None
+        self._splitInfo = None
+        self._splitLines = []
         self._updateFilterStatus()
         self.commit = None
         self._delayCommit = None
