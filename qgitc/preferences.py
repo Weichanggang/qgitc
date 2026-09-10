@@ -379,6 +379,7 @@ class Preferences(QDialog):
         self.ui.cbIgnoreWhitespace.setCurrentIndex(index)
 
         self.ui.cbShowPC.setChecked(self.settings.showParentChild())
+        self.ui.cbSortDiffByFile.setChecked(self.settings.sortDiffByFile())
 
     def _saveGeneralTab(self):
         value = self.ui.cbEsc.isChecked()
@@ -423,6 +424,9 @@ class Preferences(QDialog):
 
         value = self.ui.cbShowPC.isChecked()
         self.settings.setShowParentChild(value)
+
+        value = self.ui.cbSortDiffByFile.isChecked()
+        self.settings.setSortDiffByFile(value)
 
     def _initFontsTab(self):
         font = self.settings.logViewFont()

@@ -40,7 +40,23 @@ class TestPreferences(TestBase):
 
         QTest.mouseClick(self.preferences.ui.buttonBox.button(
             QDialogButtonBox.Ok), Qt.LeftButton)
+    def testSortDiffByFileDefaultsOff(self):
+        """The new checkbox exists on the General/Diff view page and
+        defaults to unchecked; saving the dialog persists its state."""
+        self.assertFalse(self.app.settings().sortDiffByFile())
 
+        # General tab is lazily initialized on first visit
+        self.preferences.ui.tabWidget.setCurrentWidget(
+            self.preferences.ui.tabGeneral)
+        self.processEvents()
+
+        self.assertFalse(self.preferences.ui.cbSortDiffByFile.isChecked())
+
+        self.preferences.ui.cbSortDiffByFile.setChecked(True)
+        self.preferences.save()
+
+        self.assertTrue(self.app.settings().sortDiffByFile())
+        self.app.settings().setSortDiffByFile(False)
     def testExecDestroysDialogInGuiThread(self):
         # exec() leaves the dialog owned by Python even when it has a parent,
         # so anything left to the cyclic collector is destroyed by whichever

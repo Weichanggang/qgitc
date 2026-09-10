@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for DiffView's incremental per-file diff accumulation."""
 
+from qgitc.applicationbase import ApplicationBase
 from qgitc.diffutils import DiffType, FileInfo, FileState
 from qgitc.diffview import DiffView
 from tests.base import TestBase
@@ -101,3 +102,51 @@ class TestDiffViewChunkedDiff(TestBase):
         self.assertIsNone(self._view._splitInfo)
         self.assertEqual([], self._view._splitLines)
         self.assertEqual({}, self._view._pendingDiffs)
+
+
+class TestDiffViewFileOrder(TestBase):
+    """File order in the diff view follows the sortDiffByFile setting."""
+
+    def doCreateRepo(self):
+        """No repo needed for these unit-level tests."""
+        pass
+
+    def setUp(self):
+        super().setUp()
+        self._view = DiffView()
+
+    def tearDown(self):
+        self._view.deleteLater()
+        self.processEvents()
+        super().tearDown()
+
+    def _addFiles(self, *names):
+        """Accumulate one file per name, in the given (git output) order."""
+        for i, name in enumerate(names):
+            self._view._DiffView__onDiffAvailable(
+                [(DiffType.File, name.encode()),
+                 (DiffType.Diff, b"+content")],
+                {name: FileInfo(i)})
+
+    def _flushedFileOrder(self):
+        self._view._flushPendingDiffs()
+        return [f for f, _ in self._view.fileListModel._fileList]
+
+    def testDefaultIsUnsorted(self):
+        """The setting defaults to off: keep the git output order."""
+        settings = ApplicationBase.instance().settings()
+        self.assertFalse(settings.sortDiffByFile())
+
+        self._addFiles("zebra.txt", "alpha.txt", "mid.txt")
+        self.assertEqual(["zebra.txt", "alpha.txt", "mid.txt"],
+                         self._flushedFileOrder())
+
+    def testSortedWhenEnabled(self):
+        settings = ApplicationBase.instance().settings()
+        settings.setSortDiffByFile(True)
+        try:
+            self._addFiles("zebra.txt", "alpha.txt", "mid.txt")
+            self.assertEqual(["alpha.txt", "mid.txt", "zebra.txt"],
+                             self._flushedFileOrder())
+        finally:
+            settings.setSortDiffByFile(False)

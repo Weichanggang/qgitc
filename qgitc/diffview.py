@@ -638,7 +638,11 @@ class DiffView(QWidget):
                                  self.fetcher.errorData.decode("utf-8"))
 
     def _flushPendingDiffs(self):
-        """Flush pending diff blocks sorted by file name to viewer + file list."""
+        """Flush pending diff blocks to viewer + file list.
+
+        Sorted by file name when the user enabled it; otherwise the original
+        git output order (dict insertion order) is kept.
+        """
         # The last file's diff has no following marker; flush it too.
         self._flushSplitFile()
         diffs = self._pendingDiffs
@@ -646,8 +650,13 @@ class DiffView(QWidget):
         if not diffs:
             return
 
+        if ApplicationBase.instance().settings().sortDiffByFile():
+            names = sorted(diffs, key=str.lower)
+        else:
+            names = list(diffs)
+
         row = self.viewer.textLineCount()
-        for fileName in sorted(diffs, key=str.lower):
+        for fileName in names:
             lineItems, info = diffs[fileName]
             info.row = row
             self.fileListModel.addFile(fileName, info)

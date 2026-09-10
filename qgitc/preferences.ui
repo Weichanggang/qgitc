@@ -303,6 +303,13 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QCheckBox" name="cbSortDiffByFile">
+            <property name="text">
+             <string>Sort files by name</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
