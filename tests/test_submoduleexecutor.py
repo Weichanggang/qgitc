@@ -168,3 +168,79 @@ class TestSubmoduleExecutor(TestBase):
             # wait for result
             self.wait(100)
             mock.assert_any_call(None, "Hello, World!")
+
+
+class TestSubmoduleExecutorCancelReentrancy(TestBase):
+    """Regression tests for cancel()'s re-entrancy holes.
+
+    _terminateThread() pumps the GUI event loop while waiting for the
+    thread, so queued finished() handlers run re-entrantly — and
+    StatusFetcher.onFinished() re-submits, mutating _thread/_threads
+    underneath a running cancel(). The disconnects must therefore be
+    idempotent and the bookkeeping must not leave stale references.
+    """
+
+    def doCreateRepo(self):
+        pass
+
+    def testCancelToleratesAlreadyDisconnectedThread(self):
+        """cancel(force=True) must not raise when the thread's finished()
+        connection was already disconnected by a previous cancel pass."""
+        executor = SubmoduleExecutor()
+        executor.submit(["."], lambda *a: None)
+        thread = executor._thread
+
+        # simulate a previous cancel pass that already disconnected
+        # _onThreadFinished (e.g. via its force-cleanup loop)
+        thread.finished.disconnect(executor._onThreadFinished)
+
+        # must not raise
+        executor.cancel(True)
+
+        self.assertIsNone(executor._thread)
+        self.assertEqual(executor._threads, [])
+        self.processEvents()
+
+    def testCancelClearsStaleThreadReference(self):
+        """cancel(force=True) must clear _thread even when the thread
+        already finished but its queued finished() handlers (which clear
+        _thread) have not been delivered yet."""
+        executor = SubmoduleExecutor()
+        executor.submit(["."], lambda *a: None)
+        thread = executor._thread
+
+        # wait for the thread to finish WITHOUT pumping events, so the
+        # queued finished() handlers stay pending
+        thread.wait(5000)
+        self.assertFalse(thread.isRunning())
+        self.assertIsNotNone(executor._thread)
+
+        executor.cancel(True)
+
+        self.assertIsNone(executor._thread)
+        self.assertEqual(executor._threads, [])
+        self.processEvents()
+
+    def testCancelForceKeepsThreadSubmittedDuringTerminate(self):
+        """A thread submitted re-entrantly during cancel()'s terminate wait
+        must survive in _threads instead of being disconnected and cleared
+        by the same cancel pass."""
+        executor = SubmoduleExecutor()
+
+        def action(submodule, userData, cancelEvent):
+            # mimics StatusFetcher.onFinished re-fetching while
+            # _terminateThread pumps the event loop
+            executor.submit(["."], lambda *a: None)
+
+        executor.submit(["."], action)
+        executor.cancel(True)
+        self.processEvents()
+
+        # the re-entrantly submitted thread must still be tracked with its
+        # finished() connection intact (not disconnected behind our back)
+        for thread in executor._threads:
+            self.assertTrue(thread.isRunning() or thread.isFinished())
+
+        executor.cancel(True)
+        self.assertEqual(executor._threads, [])
+        self.processEvents()

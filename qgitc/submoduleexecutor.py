@@ -157,26 +157,55 @@ class SubmoduleExecutor(QObject):
         self._threads.append(self._thread)
         self._thread.start()
 
+    @staticmethod
+    def _disconnectQuietly(signal, slot):
+        """Disconnect `signal` from `slot`, tolerating an absent connection.
+
+        cancel() can process the same thread twice: _terminateThread()
+        pumps the GUI event loop while waiting for the thread, which
+        delivers queued finished() handlers re-entrantly, and
+        StatusFetcher.onFinished() re-submits on top. That can disconnect
+        a thread underneath a later cancel() pass. PySide6 raises
+        RuntimeError when disconnecting a connection that is already
+        gone, so the disconnects here must be idempotent.
+        """
+        try:
+            signal.disconnect(slot)
+        except RuntimeError:
+            pass
+
     def cancel(self, force=False):
-        if self._thread and self._thread.isRunning():
+        thread = self._thread
+        # Detach first: the terminate wait below pumps the event loop and
+        # queued finished() handlers run re-entrantly; they must not see a
+        # stale current thread (this also clears the reference when the
+        # thread already finished but its handlers are still pending).
+        self._thread = None
+
+        if thread and thread.isRunning():
             logger.info("cancelling submodule thread")
-            self._thread.finished.disconnect(self.onFinished)
-            self._thread.started.disconnect(self.started)
-            self._thread.requestInterruption()
+            self._disconnectQuietly(thread.finished, self.onFinished)
+            self._disconnectQuietly(thread.started, self.started)
+            thread.requestInterruption()
 
             if force:
-                self._threads.remove(self._thread)
-                self._thread.finished.disconnect(self._onThreadFinished)
-                self._terminateThread(self._thread)
-            self._thread = None
+                if thread in self._threads:
+                    self._threads.remove(thread)
+                self._disconnectQuietly(
+                    thread.finished, self._onThreadFinished)
+                self._terminateThread(thread)
 
         if not force:
             return
 
-        for thread in self._threads:
-            thread.finished.disconnect(self._onThreadFinished)
+        # Snapshot and clear before iterating: a re-entrant submit during
+        # the terminate waits below appends to the fresh list instead of
+        # being disconnected and cleared by this same pass.
+        threads = self._threads
+        self._threads = []
+        for thread in threads:
+            self._disconnectQuietly(thread.finished, self._onThreadFinished)
             self._terminateThread(thread)
-        self._threads.clear()
 
     def isRunning(self):
         return self._thread is not None and self._thread.isRunning()
