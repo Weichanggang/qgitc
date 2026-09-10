@@ -678,9 +678,15 @@ class LogView(QAbstractScrollArea, CommitSource):
         app.settings().logViewFontChanged.connect(self.updateSettings)
         app.settings().compositeModeChanged.connect(self.__onCompositeModeChanged)
 
-        logWindow = self.logWindow()
-        if logWindow:
-            app.submoduleAvailable.connect(self.__onSubmoduleAvailable)
+        # Do NOT gate this on logWindow(): during the LogWindow's own
+        # construction (which creates this view) getWindow(LogWindow, False)
+        # still returns None, so the connection would never be made for the
+        # main log view — a finished submodule scan could not reload it into
+        # composite mode on first open of a repo. Connect unconditionally
+        # instead: __onCompositeModeChanged already no-ops for non-standalone
+        # views (commit panel, blame view), same as compositeModeChanged
+        # above.
+        app.submoduleAvailable.connect(self.__onSubmoduleAvailable)
 
         self._finder.resultAvailable.connect(
             self.__onFindResultAvailable)
