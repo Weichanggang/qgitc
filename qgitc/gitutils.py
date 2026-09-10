@@ -86,7 +86,13 @@ class QGitProcess():
             if QCoreApplication.instance() is None or QCoreApplication.instance().thread() != QThread.currentThread():
                 self._process.waitForFinished()
             else:
-                while not self._process.waitForFinished(50):
+                # Loop on the state, not on waitForFinished()'s return value:
+                # if the child exits while processEvents() runs, the state
+                # becomes NotRunning and waitForFinished() then returns False
+                # ("process is not running") forever, spinning the GUI thread.
+                while self._process.state() == QProcess.Running:
+                    if self._process.waitForFinished(50):
+                        break
                     if self._cancelled:
                         return None, None
                     QCoreApplication.instance().processEvents()
